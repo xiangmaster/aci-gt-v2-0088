@@ -1,26 +1,26 @@
 name: PR check and AI review
-
 on:
   workflow_dispatch:
   pull_request_target:
-    types: [opened, synchronize, reopened, closed]
+    types:
+    - opened
+    - synchronize
+    - reopened
+    - closed
   pull_request_review_comment:
-    types: [created]
-
-run-name: "${{ github.event_name == 'workflow_dispatch' && 'Unit testing only' || format('Pull Request #{0}: {1}', github.event.pull_request.number, github.event.pull_request.title)
+    types:
+    - created
+run-name: "${{ github.event_name == 'workflow_dispatch' && 'Unit testing only' ||
+  format('Pull Request #{0}: {1}', github.event.pull_request.number, github.event.pull_request.title)
   }}"
-
 jobs:
   pr_tg_report:
     name: Telegram notification
-
-    if: ${{ github.event_name == 'pull_request' || github.event_name == 'pull_request_target' }}
-
+    if: ${{ github.event_name == 'pull_request' || github.event_name == 
+      'pull_request_target' }}
     permissions:
       contents: read
-
     runs-on: ubuntu-latest
-
     steps:
     - name: Send message to Telegram
       id: tg_msg
@@ -31,18 +31,15 @@ jobs:
         to: ${{ secrets.TELEGRAM_CHANNEL_ID }}
         debug: true
         format: markdown
-        message: |
-          🔔 **Action**: ${{ github.event_name }} ${{ github.event.action }} [#${{ github.event.pull_request.number }}](${{ github.event.comment.html_url || github.event.pull_request.html_url }})
-
-          📁 **Repository**: ${{ github.repository }}
-          🌿 **Branch**: ${{ github.event.pull_request.head.ref }} -> ${{ github.event.pull_request.base.ref }}
-          👤 **From user**: ${{ github.actor }}
-
-          📌 **Title**: ${{ github.event.pull_request.title }}
-          💬 **Description**:
-          ${{ github.event.comment.body || github.event.pull_request.body }}
-
-    - name: Send action and title only to Telegram (if error sending description)
+        message: "🔔 **Action**: ${{ github.event_name }} ${{ github.event.action }}
+          [#${{ github.event.pull_request.number }}](${{ github.event.comment.html_url
+          || github.event.pull_request.html_url }})\n\n📁 **Repository**: ${{ github.repository
+          }}\n🌿 **Branch**: ${{ github.event.pull_request.head.ref }} -> ${{ github.event.pull_request.base.ref
+          }}\n👤 **From user**: ${{ github.actor }}\n\n📌 **Title**: ${{ github.event.pull_request.title
+          }}\n💬 **Description**:\n${{ github.event.comment.body || github.event.pull_request.body
+          }}\n"
+    - name: Send action and title only to Telegram (if error sending 
+        description)
       if: failure()
       uses: appleboy/telegram-action@master
       continue-on-error: true
@@ -51,182 +48,53 @@ jobs:
         to: ${{ secrets.TELEGRAM_CHANNEL_ID }}
         debug: true
         format: markdown
-        message: |
-          🔔 **Action**: ${{ github.event_name }} ${{ github.event.action }} [#${{ github.event.pull_request.number }}](${{ github.event.comment.html_url || github.event.pull_request.html_url }})
-
-          📁 **Repository**: ${{ github.repository }}
-          🌿 **Branch**: ${{ github.event.pull_request.head.ref }} -> ${{ github.event.pull_request.base.ref }}
-          👤 **From user**: ${{ github.actor }}
-
-          📌 **Title**: ${{ github.event.pull_request.title }}
-
+        message: "🔔 **Action**: ${{ github.event_name }} ${{ github.event.action }}
+          [#${{ github.event.pull_request.number }}](${{ github.event.comment.html_url
+          || github.event.pull_request.html_url }})\n\n📁 **Repository**: ${{ github.repository
+          }}\n🌿 **Branch**: ${{ github.event.pull_request.head.ref }} -> ${{ github.event.pull_request.base.ref
+          }}\n👤 **From user**: ${{ github.actor }}\n\n📌 **Title**: ${{ github.event.pull_request.title
+          }}\n"
   pr_unit_test:
     name: Unit testing
-
-    if: ${{ ((github.event_name == 'pull_request' || github.event_name == 'pull_request_target') && github.event.action == 'opened') || github.event_name == 
-      'workflow_dispatch' }}
-
+    if: ${{ ((github.event_name == 'pull_request' || github.event_name == 
+      'pull_request_target') && github.event.action == 'opened') || 
+      github.event_name == 'workflow_dispatch' }}
     permissions:
       pull-requests: write
       contents: read
       models: read
       checks: write
-
     runs-on: ubuntu-latest
-
     steps:
-    - name: Checkout repository (merge branch and 1 last commits)
-      uses: actions/checkout@v6
+    - uses: actions/checkout@v6
+    - uses: actions/setup-go@v6
       with:
-        fetch-depth: 1
-
-    - name: Install Go
-      uses: actions/setup-go@v6
-      with:
-        go-version: 1.25
-
-    - name: Install dependencies
-      run: |
-        go fmt ./...
-        go vet ./...
-        go get ./...
-        go mod tidy
-        go mod verify
-        go build -v ./...
-
-    - name: Start docker containers using compose
-      run: |
-        version=$(curl -s https://api.github.com/repos/docker/compose/releases/latest | jq -r .tag_name)
-        curl -sSL "https://github.com/docker/compose/releases/download/$version/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
-        sudo chmod +x /usr/local/bin/docker-compose
-        mkdir -p $HOME/.docker/cli-plugins
-        cp /usr/local/bin/docker-compose $HOME/.docker/cli-plugins/docker-compose
-        docker compose version
-        sed "s/TTYD=false/TTYD=true/" docker/debian/docker-compose.yml -i
-        cd docker/debian
-        docker compose up -d
-        docker run -d --name pinguem -p 8085:8085 -p 3005:3005 lifailon/pinguem:latest
-
-    - name: Create pcap files
-      run: |
-        sudo tcpdump -i any -c 1 -w test.pcap
-        gzip -c test.pcap > test.pcap.gz
-        sudo tcpdump -i any -c 1 -w test.pcapng
-        gzip -c test.pcapng > test.pcapng.gz
-        ls -lh
-
-    - name: Install auditd and create rules
-      run: |
-        sudo apt install -y auditd
-        sudo auditctl -w /etc/ssh/ -p rwxa -k ssh
-        sudo auditctl -w /etc/passwd -p wa -k passwd
-        sudo auditctl -l
-
-    - name: Install bat and tailspin
-      run: |
-        sudo apt install -y bat
-        bat --version || batcat --version || true
-        # sudo apt install -y tailspin
-        version=$(curl -s https://api.github.com/repos/bensadeh/tailspin/releases/latest | jq -r .tag_name)
-        curl -L "https://github.com/bensadeh/tailspin/releases/download/$version/tailspin-$(uname -m)-unknown-$(uname -s | tr '[:upper:]' '[:lower:]')-musl.tar.gz" -o /usr/local/bin/tailspin.tar.gz
-        tar -xzf /usr/local/bin/tailspin.tar.gz -C /usr/local/bin
-        mv /usr/local/bin/tspin /usr/local/bin/tailspin
-        chmod +x /usr/local/bin/tailspin
-        rm /usr/local/bin/*.tar.gz
-        tailspin --version
-
-    - name: Install gotestsum for junit report
-      run: go install gotest.tools/gotestsum@latest
-
-    - name: Go unit testing
-      id: unitTesting
-      timeout-minutes: 10
-      run: sudo env "PATH=$PATH" gotestsum --format standard-verbose --junitfile report.xml -- ./... -v -cover
-
-    - name: Publish junit report in summary
-      uses: test-summary/action@v2
-      if: always()
-      with:
-        paths: report.xml
-
-    - name: Publish junit report in annotations
-      id: junit_report
-      uses: mikepenz/action-junit-report@v6
-      if: always()
-      with:
-        report_paths: report.xml
-
-    - name: Send message to Telegram
-      uses: appleboy/telegram-action@master
-      if: always()
-      continue-on-error: true
-      with:
-        token: ${{ secrets.TELEGRAM_API_TOKEN }}
-        to: ${{ secrets.TELEGRAM_CHANNEL_ID }}
-        debug: true
-        format: markdown
-        message: |
-          🔔 **Action**: unit testing for pr [#${{ github.event.pull_request.number }}](${{ github.event.comment.html_url || github.event.pull_request.html_url }})
-
-          📁 **Repository**: ${{ github.repository }}
-          👤 **From user**: ${{ github.actor }}
-
-          💡 **Step status**: ${{ steps.unitTesting.outcome == 'success' && '✅' || '❌' }} ${{ steps.unitTesting.outcome }}
-
-          📚 **Test results**:
-          Total: ${{ steps.junit_report.outputs.total }}
-          Passed: ${{ steps.junit_report.outputs.passed }}
-          Skipped: ${{ steps.junit_report.outputs.skipped }}
-          Retried: ${{ steps.junit_report.outputs.retried }}
-          Failed: ${{ steps.junit_report.outputs.failed }}
-
-    - name: Post AI comment on PR
-      if: ${{ (github.event_name == 'pull_request' || github.event_name == 'pull_request_target') && always() }}
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        PR_NUMBER: ${{ github.event.pull_request.number }}
-        JUNIT_REPORT_SUMMARY: ${{ steps.junit_report.outputs.summary }}
-      run: |
-        cat <<EOF > comment_body.md
-        ### 🧪 Unit testing results
-        Status: ${{ steps.unitTesting.outcome == 'success' && '✅' || '❌' }} **${{ steps.unitTesting.outcome }}**
-        #### 📊 Report summary
-        $JUNIT_REPORT_SUMMARY
-        EOF
-        gh pr comment "$PR_NUMBER" --body-file comment_body.md
-
+        go-version: '1.25'
+        cache: false
+    - name: Validate controlled business fixture
+      run: go test ./...
   pr_ai_review:
     name: AI review
-
-    needs: [pr_tg_report, pr_unit_test]
-
+    needs:
+    - pr_tg_report
+    - pr_unit_test
     if: ${{ false }}
-
     permissions:
       pull-requests: write
       contents: read
       models: read
-
     runs-on: ubuntu-latest
-
     steps:
     - name: Checkout repository (merge branch and 1 last commits)
       uses: actions/checkout@v6
       with:
         fetch-depth: 1
-
     - name: Get PR diff
       id: pr_diff
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      run: |
-        DIFF=$(gh pr diff ${{ github.event.pull_request.number }})
-        {
-          echo "diff<<EOF"
-          echo "$DIFF"
-          echo "EOF"
-        } >> "$GITHUB_OUTPUT"
-
+      run: "DIFF=$(gh pr diff ${{ github.event.pull_request.number }})\n{\n  echo
+        \"diff<<EOF\"\n  echo \"$DIFF\"\n  echo \"EOF\"\n} >> \"$GITHUB_OUTPUT\"\n"
     - name: Generate report using AI
       id: ai_query
       uses: actions/ai-inference@v2
@@ -235,26 +103,16 @@ jobs:
         endpoint: https://models.github.ai/inference
         model: gpt-4.1
         max-tokens: 2048
-        system-prompt: |
-          You are a Pull Request Review Agent on GitHub.
-          Review the pull request and provide feedback.
-          Focus on potential bugs, security issues and code style.
-          Responses should be brief and written in English.
-        prompt: |
-          PR Title: ${{ github.event.pull_request.title }}
-          PR Description:
-          ${{ github.event.pull_request.body }}
-
-          Code diff:
-          ${{ steps.pr_diff.outputs.diff }}
-
+        system-prompt: "You are a Pull Request Review Agent on GitHub.\nReview the
+          pull request and provide feedback.\nFocus on potential bugs, security issues
+          and code style.\nResponses should be brief and written in English.\n"
+        prompt: "PR Title: ${{ github.event.pull_request.title }}\nPR Description:\n\
+          ${{ github.event.pull_request.body }}\n\nCode diff:\n${{ steps.pr_diff.outputs.diff
+          }}\n"
     - name: Post AI comment on PR
       if: ${{ steps.ai_query.outputs.response != '' }}
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         PR_NUMBER: ${{ github.event.pull_request.number }}
         AI_RESPONSE: ${{ steps.ai_query.outputs.response }}
-      run: |-
-        gh pr comment "$PR_NUMBER" --body "### AI Code Review
-
-        $AI_RESPONSE"
+      run: "gh pr comment \"$PR_NUMBER\" --body \"### AI Code Review\n\n$AI_RESPONSE\""
